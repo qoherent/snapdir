@@ -35,6 +35,7 @@ use std::time::Instant;
 
 /// Reads cumulative process CPU time (user + system) in seconds via
 /// `getrusage(RUSAGE_SELF)`. Returns `None` on failure; never panics.
+#[cfg(unix)]
 fn rusage_cpu_secs() -> Option<f64> {
     // SAFETY: rusage is plain POD; we pass a valid &mut to a single syscall and
     // only read the struct after confirming the return code is 0.
@@ -46,6 +47,11 @@ fn rusage_cpu_secs() -> Option<f64> {
         let secs = |tv: libc::timeval| tv.tv_sec as f64 + tv.tv_usec as f64 / 1_000_000.0;
         Some(secs(ru.ru_utime) + secs(ru.ru_stime))
     }
+}
+
+#[cfg(not(unix))]
+fn rusage_cpu_secs() -> Option<f64> {
+    None
 }
 
 /// Samples process CPU utilization as a percentage of total machine capacity,
