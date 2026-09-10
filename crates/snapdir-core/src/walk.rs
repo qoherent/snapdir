@@ -43,6 +43,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::io;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -283,8 +284,26 @@ impl WalkError {
 /// Renders the octal permission string for a file mode, matching
 /// `stat -f '%A'` (macOS) / `stat -c '%a'` (Linux): the low 12 mode bits in
 /// octal with no leading zero (e.g. `755`, `644`, `4755`).
+#[cfg(unix)]
 fn octal_permissions(mode: u32) -> String {
     format!("{:o}", mode & 0o7777)
+}
+
+// Windows permissions are documentary only, never Snapdir semantic identity.
+fn portable_permissions(metadata: &std::fs::Metadata) -> String {
+    #[cfg(unix)]
+    {
+        octal_permissions(metadata.permissions().mode())
+    }
+    #[cfg(not(unix))]
+    {
+        if metadata.permissions().readonly() {
+            "444"
+        } else {
+            "666"
+        }
+        .to_string()
+    }
 }
 
 /// Returns a path as `&str`, or a [`WalkError::NonUtf8Path`].
@@ -475,7 +494,7 @@ fn walk_inner<H: Hasher + HashFile + Sync>(
     // the root we `lstat` it directly (it is normally a real directory; if it
     // is itself a symlink the user passed, its own perms still apply).
     let root_lstat = std::fs::symlink_metadata(root).map_err(|e| WalkError::io(root, e))?;
-    let root_permissions = octal_permissions(root_lstat.permissions().mode());
+    let root_permissions = portable_permissions(&root_lstat);
 
     let root_str = path_str(root)?.to_owned();
 
@@ -682,7 +701,7 @@ fn discover_dir<H: Hasher + HashFile + Sync>(
         // the symlink's perms/size while its CHECKSUM is read through the link
         // (b3sum/md5sum/sha256sum all follow symlinks). For a real (non-symlink)
         // entry `lstat` == `stat`, so this is identical there.
-        let own_permissions = octal_permissions(link_meta.permissions().mode());
+        let own_permissions = portable_permissions(&link_meta);
 
         if file_type.is_dir() {
             record.child_dirs.push(entry_abs.clone());
@@ -925,6 +944,7 @@ fn hash_pending<H: Hasher + HashFile + Sync>(
             }
             // The SIGBUS guard caught a mid-hash truncation/shrink (mmap fault):
             // the recorded checksum would be incoherent.
+            #[cfg(unix)]
             Err(e) if crate::sigbus::is_mmap_fault(&e) => {
                 return Err(WalkError::FileChangedDuringWalk {
                     path: item.content_path.clone(),
